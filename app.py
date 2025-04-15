@@ -4,12 +4,13 @@ import os
 import json
 from datetime import datetime
 import hashlib
+import sqlite3  # Added SQLite import
 
 # Page config
 st.set_page_config(page_title="Attendance Tracker", layout="wide", page_icon="📊")
 
 # Custom CSS styling
-st.markdown("""
+st.markdown(""" 
 <style>
 /* Overall page styling with deep blue background */
 .stApp {
@@ -204,66 +205,200 @@ if 'attendance_uploaded' not in st.session_state:
 if 'attendance_data' not in st.session_state:
     st.session_state.attendance_data = None
 
-# File paths
-DATA_DIR = "user_data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+# Database setup
+def init_db():
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    
+    # Create users table
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS users
+    (username TEXT PRIMARY KEY, password_hash TEXT)
+    ''')
+    
+    # Create attendance_data table to store Excel uploads
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS student_data
+    (username TEXT PRIMARY KEY, data TEXT)
+    ''')
+    
+    # Create tables for attendance records
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS class_attendance
+    (username TEXT PRIMARY KEY, data TEXT)
+    ''')
+    
+    # Create tables for practical attendance
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS practical_attendance
+    (username TEXT PRIMARY KEY, data TEXT)
+    ''')
+    
+    # Create batch-specific attendance tables
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS batch_attendance
+    (username TEXT, batch TEXT, data TEXT, 
+    PRIMARY KEY (username, batch))
+    ''')
+    
+    # Create defaulters table
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS defaulters
+    (username TEXT, type TEXT, batch TEXT, data TEXT, 
+    PRIMARY KEY (username, type, batch))
+    ''')
+    
+    conn.commit()
+    conn.close()
 
-USERS_FILE = os.path.join(DATA_DIR, "users.json")
-if not os.path.exists(USERS_FILE):
-    with open(USERS_FILE, 'w') as f:
-        json.dump({}, f)
+# Initialize database
+init_db()
 
 # Helpers
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def load_users():
-    try:
-        with open(USERS_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_users(users):
-    with open(USERS_FILE, 'w') as f:
-        json.dump(users, f)
-
-def get_user_data_path(username, filename=None):
-    user_folder = os.path.join(DATA_DIR, username)
-    os.makedirs(user_folder, exist_ok=True)  # Create folder if not exists
-    if filename:
-        return os.path.join(user_folder, filename)
-    return user_folder
-
-def save_attendance_data(username, df):
-    user_folder = get_user_data_path(username)
-    data_path = os.path.join(user_folder, "student_data.json")
-    data_dict = {'columns': df.columns.tolist(), 'data': df.to_dict(orient='records')}
-    with open(data_path, 'w') as f:
-        json.dump(data_dict, f)
-
-def load_attendance_data(username):
-    try:
-        user_folder = get_user_data_path(username)
-        data_path = os.path.join(user_folder, "student_data.json")
-        with open(data_path, 'r') as f:
-            data_dict = json.load(f)
-            return pd.DataFrame(data_dict['data'], columns=data_dict['columns'])
-    except:
-        return None
-
 def register_user(username, password):
-    users = load_users()
-    if username in users:
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE username=?", (username,))
+    if c.fetchone():
+        conn.close()
         return False
-    users[username] = hash_password(password)
-    save_users(users)
+    
+    c.execute("INSERT INTO users VALUES (?, ?)", (username, hash_password(password)))
+    conn.commit()
+    conn.close()
     return True
 
 def verify_user(username, password):
-    users = load_users()
-    return username in users and users[username] == hash_password(password)
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    c.execute("SELECT password_hash FROM users WHERE username=?", (username,))
+    result = c.fetchone()
+    conn.close()
+    
+    if result and result[0] == hash_password(password):
+        return True
+    return False
+
+def save_attendance_data(username, df):
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    # Convert DataFrame to JSON string
+    data_json = df.to_json()
+    
+    # Use INSERT OR REPLACE to update if exists or insert if not
+    c.execute("INSERT OR REPLACE INTO student_data (username, data) VALUES (?, ?)", 
+              (username, data_json))
+    
+    conn.commit()
+    conn.close()
+
+def load_attendance_data(username):
+    try:
+        conn = sqlite3.connect('attendance_tracker.db')
+        c = conn.cursor()
+        c.execute("SELECT data FROM student_data WHERE username=?", (username,))
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            # Convert JSON string back to DataFrame
+            return pd.read_json(result[0])
+        return None
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return None
+
+def save_class_attendance(username, df):
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    data_json = df.to_json()
+    
+    c.execute("INSERT OR REPLACE INTO class_attendance (username, data) VALUES (?, ?)", 
+              (username, data_json))
+    
+    conn.commit()
+    conn.close()
+
+def load_class_attendance(username):
+    try:
+        conn = sqlite3.connect('attendance_tracker.db')
+        c = conn.cursor()
+        c.execute("SELECT data FROM class_attendance WHERE username=?", (username,))
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            return pd.read_json(result[0])
+        return None
+    except Exception as e:
+        st.error(f"Error loading class attendance: {e}")
+        return None
+
+def save_practical_attendance(username, df):
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    data_json = df.to_json()
+    
+    c.execute("INSERT OR REPLACE INTO practical_attendance (username, data) VALUES (?, ?)", 
+              (username, data_json))
+    
+    conn.commit()
+    conn.close()
+
+def load_practical_attendance(username):
+    try:
+        conn = sqlite3.connect('attendance_tracker.db')
+        c = conn.cursor()
+        c.execute("SELECT data FROM practical_attendance WHERE username=?", (username,))
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            return pd.read_json(result[0])
+        return None
+    except Exception as e:
+        st.error(f"Error loading practical attendance: {e}")
+        return None
+
+def save_batch_attendance(username, batch, df):
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    data_json = df.to_json()
+    
+    c.execute("INSERT OR REPLACE INTO batch_attendance (username, batch, data) VALUES (?, ?, ?)", 
+              (username, batch, data_json))
+    
+    conn.commit()
+    conn.close()
+
+def load_batch_attendance(username, batch):
+    try:
+        conn = sqlite3.connect('attendance_tracker.db')
+        c = conn.cursor()
+        c.execute("SELECT data FROM batch_attendance WHERE username=? AND batch=?", (username, batch))
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            return pd.read_json(result[0])
+        return None
+    except Exception as e:
+        st.error(f"Error loading batch attendance: {e}")
+        return None
+
+def save_defaulters(username, type_name, batch, df):
+    conn = sqlite3.connect('attendance_tracker.db')
+    c = conn.cursor()
+    data_json = df.to_json()
+    
+    c.execute("INSERT OR REPLACE INTO defaulters (username, type, batch, data) VALUES (?, ?, ?, ?)", 
+              (username, type_name, batch, data_json))
+    
+    conn.commit()
+    conn.close()
 
 def get_batch(roll):
     try:
@@ -305,7 +440,7 @@ def login():
         
         if login_button:
             if verify_user(username, password):
-                st.success("Login successful! Redirecting...")
+                st.success("Login successful!... Redirecting...")
                 st.session_state.logged_in = True
                 st.session_state.username = username
                 attendance_data = load_attendance_data(username)
@@ -337,7 +472,7 @@ def login():
                 else:
                     st.error("Username already exists")
 
-# Upload Page (Only First Time)
+# Upload Excel Page (Only First Time)
 def upload_excel_page():
     st.markdown("<h1 class='main-header'>📊 Attendance Tracker</h1>", unsafe_allow_html=True)
     st.markdown(f"<p style='text-align: center; font-size: 18px; margin-bottom: 30px; color: #64FFDA;'>Welcome, <b>{st.session_state.username}</b>!</p>", unsafe_allow_html=True)
@@ -387,7 +522,7 @@ def main_app():
         if st.button("📤 Upload New Excel", key="upload_new", use_container_width=True):
             st.session_state.attendance_uploaded = False
             st.rerun()
-            
+        
         st.markdown("<div class='logout-btn'>", unsafe_allow_html=True)
         if st.button("🚪 Logout", key="logout_btn", use_container_width=True):
             logout()
@@ -429,39 +564,34 @@ def main_app():
                     absent_list.append(int(r))
                 except ValueError:
                     absent_list.append(str(r))
-
+            
             column_name = f"{date_str}_{attendance_type}"
             updated_df = df.copy()
-
+            
             if attendance_type == "Class":
-                class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
-                if os.path.exists(class_file):
-                    class_df = pd.read_excel(class_file)
-                else:
+                class_df = load_class_attendance(st.session_state.username)
+                if class_df is None:
                     class_df = updated_df[['roll', 'name']].copy()
-
+                
                 class_df[column_name] = "Present"
                 class_df.loc[class_df['roll'].isin(absent_list), column_name] = "Absent"
-                class_df.to_excel(class_file, index=False)
+                save_class_attendance(st.session_state.username, class_df)
                 st.success("Class attendance recorded successfully!")
-
+            
             elif attendance_type == "Practical" and selected_batch:
-                practical_file = get_user_data_path(st.session_state.username, "practical_attendance.xlsx")
-                if os.path.exists(practical_file):
-                    practical_df = pd.read_excel(practical_file)
-                else:
+                practical_df = load_practical_attendance(st.session_state.username)
+                if practical_df is None:
                     practical_df = updated_df[['roll', 'name']].copy()
-
+                
                 practical_df[column_name] = ""
                 practical_df.loc[updated_df['batch'] == selected_batch, column_name] = "Present"
                 practical_df.loc[(updated_df['batch'] == selected_batch) & (practical_df['roll'].isin(absent_list)), column_name] = "Absent"
-                practical_df.to_excel(practical_file, index=False)
-
+                save_practical_attendance(st.session_state.username, practical_df)
+                
                 for batch in ['A', 'B', 'C', 'D']:
                     batch_df = practical_df[practical_df['roll'].isin(updated_df[updated_df['batch'] == batch]['roll'])]
-                    batch_file = get_user_data_path(st.session_state.username, f"batch_{batch}_attendance.xlsx")
-                    batch_df.to_excel(batch_file, index=False)
-
+                    save_batch_attendance(st.session_state.username, batch, batch_df)
+                
                 st.success(f"Practical attendance for Batch {selected_batch} recorded successfully!")
         st.markdown("</div>", unsafe_allow_html=True)
         
@@ -469,44 +599,42 @@ def main_app():
         st.markdown("<h2 class='sub-header'>Absent Students in Last 5 Sessions</h2>", unsafe_allow_html=True)
         
         if attendance_type == "Class":
-            class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
-            if os.path.exists(class_file):
-                df = pd.read_excel(class_file)
-                attendance_cols = [col for col in df.columns if col not in ['roll', 'name']]
+            class_df = load_class_attendance(st.session_state.username)
+            if class_df is not None:
+                attendance_cols = [col for col in class_df.columns if col not in ['roll', 'name']]
                 last_cols = attendance_cols[-5:] if len(attendance_cols) >= 5 else attendance_cols
-
+                
                 if not last_cols:
                     st.info("No attendance records found yet.")
                 else:
                     for col in last_cols:
                         st.markdown(f"<p style='font-weight: 500; margin-top: 10px; color: #64FFDA;'>🗓 {col}</p>", unsafe_allow_html=True)
-                        absent_students = df[df[col] == "Absent"]["roll"].tolist()
+                        absent_students = class_df[class_df[col] == "Absent"]["roll"].tolist()
                         if absent_students:
                             st.markdown(f"<p style='background-color: #3A2518; padding: 8px; border-radius: 5px; color: #F87171;'>Absent: {', '.join(map(str, absent_students))}</p>", unsafe_allow_html=True)
                         else:
                             st.markdown("<p style='background-color: #0D3331; padding: 8px; border-radius: 5px; color: #34D399;'>No students marked absent.</p>", unsafe_allow_html=True)
             else:
-                st.info("Class attendance file not found.")
-
+                st.info("Class attendance data not found.")
+        
         elif attendance_type == "Practical" and selected_batch:
-            batch_file = get_user_data_path(st.session_state.username, f"batch_{selected_batch}_attendance.xlsx")
-            if os.path.exists(batch_file):
-                df = pd.read_excel(batch_file)
-                attendance_cols = [col for col in df.columns if col not in ['roll', 'name']]
+            batch_df = load_batch_attendance(st.session_state.username, selected_batch)
+            if batch_df is not None:
+                attendance_cols = [col for col in batch_df.columns if col not in ['roll', 'name']]
                 last_cols = attendance_cols[-5:] if len(attendance_cols) >= 5 else attendance_cols
-
+                
                 if not last_cols:
                     st.info("No attendance records found yet.")
                 else:
                     for col in last_cols:
                         st.markdown(f"<p style='font-weight: 500; margin-top: 10px; color: #64FFDA;'>🗓 {col}</p>", unsafe_allow_html=True)
-                        absent_students = df[df[col] == "Absent"]["roll"].tolist()
+                        absent_students = batch_df[batch_df[col] == "Absent"]["roll"].tolist()
                         if absent_students:
                             st.markdown(f"<p style='background-color: #3A2518; padding: 8px; border-radius: 5px; color: #F87171;'>Absent: {', '.join(map(str, absent_students))}</p>", unsafe_allow_html=True)
                         else:
                             st.markdown("<p style='background-color: #0D3331; padding: 8px; border-radius: 5px; color: #34D399;'>No students marked absent.</p>", unsafe_allow_html=True)
             else:
-                st.info(f"Batch {selected_batch} attendance file not found.")
+                st.info(f"Batch {selected_batch} attendance data not found.")
         st.markdown("</div>", unsafe_allow_html=True)
     
     with tabs[1]:
@@ -517,9 +645,14 @@ def main_app():
         
         with col1:
             st.markdown("<p style='font-weight: 500; color: #64FFDA;'>Class Attendance</p>", unsafe_allow_html=True)
-            class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
-            if os.path.exists(class_file):
-                with open(class_file, "rb") as f:
+            class_df = load_class_attendance(st.session_state.username)
+            if class_df is not None:
+                # Generate Excel file on-the-fly
+                buffer = pd.ExcelWriter("class_attendance.xlsx", engine="xlsxwriter")
+                class_df.to_excel(buffer, index=False)
+                buffer.close()
+                
+                with open("class_attendance.xlsx", "rb") as f:
                     st.download_button(
                         label="📥 Download Class Attendance Excel",
                         data=f.read(),
@@ -528,16 +661,21 @@ def main_app():
                         use_container_width=True
                     )
             else:
-                st.info("No class attendance file available.")
+                st.info("No class attendance data available.")
         
         with col2:
             st.markdown("<p style='font-weight: 500; color: #64FFDA;'>Practical Attendance</p>", unsafe_allow_html=True)
             batch_options = ["A", "B", "C", "D"]
             selected_batch = st.selectbox("Select Batch", batch_options, key="dl_batch")
             
-            batch_file = get_user_data_path(st.session_state.username, f"batch_{selected_batch}_attendance.xlsx")
-            if os.path.exists(batch_file):
-                with open(batch_file, "rb") as f:
+            batch_df = load_batch_attendance(st.session_state.username, selected_batch)
+            if batch_df is not None:
+                # Generate Excel file on-the-fly
+                buffer = pd.ExcelWriter(f"batch_{selected_batch}_attendance.xlsx", engine="xlsxwriter")
+                batch_df.to_excel(buffer, index=False)
+                buffer.close()
+                
+                with open(f"batch_{selected_batch}_attendance.xlsx", "rb") as f:
                     st.download_button(
                         label=f"📥 Download Batch {selected_batch} Attendance",
                         data=f.read(),
@@ -546,7 +684,7 @@ def main_app():
                         use_container_width=True
                     )
             else:
-                st.info(f"No Batch {selected_batch} attendance file available.")
+                st.info(f"No Batch {selected_batch} attendance data available.")
         st.markdown("</div>", unsafe_allow_html=True)
     
     with tabs[2]:
@@ -560,20 +698,19 @@ def main_app():
             calc_btn = st.button("Calculate Defaulters", key="calc_defaulters", use_container_width=True)
         
         if calc_btn:
-            def calculate_defaulters(file_path, type_name):
-                if not os.path.exists(file_path):
+            def calculate_defaulters(df, type_name, batch=None):
+                if df is None:
                     st.warning(f"No {type_name} attendance data found.")
                     return
-
-                df = pd.read_excel(file_path)
+                
                 if df.shape[1] <= 2:
                     st.warning(f"No attendance records found in {type_name}.")
                     return
-
+                
                 total_classes = df.shape[1] - 2  # excluding roll and name columns
                 attendance_counts = df.iloc[:, 2:].applymap(lambda x: 1 if x == "Present" else 0)
                 df["Attendance %"] = attendance_counts.sum(axis=1) / total_classes * 100
-
+                
                 defaulters_df = df[df["Attendance %"] < 80].copy()
                 if defaulters_df.empty:
                     st.markdown("<div class='success-box'>", unsafe_allow_html=True)
@@ -584,11 +721,16 @@ def main_app():
                     
                     # Dataframe
                     st.dataframe(defaulters_df[["roll", "name", "Attendance %"]], use_container_width=True)
-
-                    defaulter_file = get_user_data_path(st.session_state.username, f"{type_name.lower()}_defaulters.xlsx")
-                    defaulters_df.to_excel(defaulter_file, index=False)
-
-                    with open(defaulter_file, "rb") as f:
+                    
+                    # Save defaulters to database
+                    save_defaulters(st.session_state.username, type_name, batch, defaulters_df)
+                    
+                    # Create Excel for download
+                    buffer = pd.ExcelWriter(f"{type_name.lower()}_defaulters.xlsx", engine="xlsxwriter")
+                    defaulters_df.to_excel(buffer, index=False)
+                    buffer.close()
+                    
+                    with open(f"{type_name.lower()}_defaulters.xlsx", "rb") as f:
                         st.download_button(
                             label=f"📥 Download {type_name} Defaulters Excel",
                             data=f.read(),
@@ -596,57 +738,21 @@ def main_app():
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
-
+            
             if defaulter_type == "Class":
-                class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
-                calculate_defaulters(class_file, "Class")
+                class_df = load_class_attendance(st.session_state.username)
+                calculate_defaulters(class_df, "Class")
             else:
                 selected_batch = st.selectbox("Select Batch", ["A", "B", "C", "D"], key="defaulter_batch_select")
-                practical_file = get_user_data_path(st.session_state.username, "practical_attendance.xlsx")
+                batch_df = load_batch_attendance(st.session_state.username, selected_batch)
                 
-                if os.path.exists(practical_file):
-                    df = pd.read_excel(practical_file)
-                    if df.shape[1] <= 2:
-                        st.warning("No practical attendance records found.")
-                    else:
-                        batch_df = df[df['roll'].isin(
-                            st.session_state.attendance_data[
-                                st.session_state.attendance_data['batch'] == selected_batch
-                            ]['roll']
-                        )].copy()
-
-                        total_classes = batch_df.shape[1] - 2
-                        attendance_counts = batch_df.iloc[:, 2:].applymap(lambda x: 1 if x == "Present" else 0)
-                        batch_df["Attendance %"] = attendance_counts.sum(axis=1) / total_classes * 100
-
-                        defaulters_df = batch_df[batch_df["Attendance %"] < 80].copy()
-                        if defaulters_df.empty:
-                            st.markdown("<div class='success-box'>", unsafe_allow_html=True)
-                            st.markdown(f"✅ No defaulters in Batch {selected_batch} Practical attendance!", unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"<p style='font-weight: 500; margin-top: 20px; color: #F87171;'>⚠ Defaulters in Batch {selected_batch} Practical Attendance (Below 80%)</p>", unsafe_allow_html=True)
-                            
-                            # Dataframe
-                            st.dataframe(defaulters_df[["roll", "name", "Attendance %"]], use_container_width=True)
-
-                            defaulter_file = get_user_data_path(st.session_state.username, 
-                                                            f"batch_{selected_batch.lower()}_practical_defaulters.xlsx")
-                            defaulters_df.to_excel(defaulter_file, index=False)
-
-                            with open(defaulter_file, "rb") as f:
-                                st.download_button(
-                                    label=f"📥 Download Batch {selected_batch} Defaulters Excel",
-                                    data=f.read(),
-                                    file_name=f"batch_{selected_batch.lower()}_practical_defaulters.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    use_container_width=True
-                                )
+                if batch_df is not None:
+                    calculate_defaulters(batch_df, "Practical", selected_batch)
                 else:
-                    st.warning("No practical attendance file found.")
+                    st.warning("No practical attendance data found.")
         st.markdown("</div>", unsafe_allow_html=True)
 
-# Run
+# Run the app
 if not st.session_state.logged_in:
     login()
 elif not st.session_state.attendance_uploaded:
