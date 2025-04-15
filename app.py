@@ -229,17 +229,25 @@ def save_users(users):
     with open(USERS_FILE, 'w') as f:
         json.dump(users, f)
 
-def get_user_data_path(username):
-    return os.path.join(DATA_DIR, f"{username}_attendance.json")
+def get_user_data_path(username, filename=None):
+    user_folder = os.path.join(DATA_DIR, username)
+    os.makedirs(user_folder, exist_ok=True)  # Create folder if not exists
+    if filename:
+        return os.path.join(user_folder, filename)
+    return user_folder
 
 def save_attendance_data(username, df):
+    user_folder = get_user_data_path(username)
+    data_path = os.path.join(user_folder, "student_data.json")
     data_dict = {'columns': df.columns.tolist(), 'data': df.to_dict(orient='records')}
-    with open(get_user_data_path(username), 'w') as f:
+    with open(data_path, 'w') as f:
         json.dump(data_dict, f)
 
 def load_attendance_data(username):
     try:
-        with open(get_user_data_path(username), 'r') as f:
+        user_folder = get_user_data_path(username)
+        data_path = os.path.join(user_folder, "student_data.json")
+        with open(data_path, 'r') as f:
             data_dict = json.load(f)
             return pd.DataFrame(data_dict['data'], columns=data_dict['columns'])
     except:
@@ -425,11 +433,8 @@ def main_app():
             column_name = f"{date_str}_{attendance_type}"
             updated_df = df.copy()
 
-            user_folder = os.path.join(DATA_DIR, st.session_state.username)
-            os.makedirs(user_folder, exist_ok=True)
-
             if attendance_type == "Class":
-                class_file = os.path.join(user_folder, "class_attendance.xlsx")
+                class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
                 if os.path.exists(class_file):
                     class_df = pd.read_excel(class_file)
                 else:
@@ -441,7 +446,7 @@ def main_app():
                 st.success("Class attendance recorded successfully!")
 
             elif attendance_type == "Practical" and selected_batch:
-                practical_file = os.path.join(user_folder, "practical_attendance.xlsx")
+                practical_file = get_user_data_path(st.session_state.username, "practical_attendance.xlsx")
                 if os.path.exists(practical_file):
                     practical_df = pd.read_excel(practical_file)
                 else:
@@ -454,7 +459,7 @@ def main_app():
 
                 for batch in ['A', 'B', 'C', 'D']:
                     batch_df = practical_df[practical_df['roll'].isin(updated_df[updated_df['batch'] == batch]['roll'])]
-                    batch_file = os.path.join(user_folder, f"batch_{batch}_attendance.xlsx")
+                    batch_file = get_user_data_path(st.session_state.username, f"batch_{batch}_attendance.xlsx")
                     batch_df.to_excel(batch_file, index=False)
 
                 st.success(f"Practical attendance for Batch {selected_batch} recorded successfully!")
@@ -464,7 +469,7 @@ def main_app():
         st.markdown("<h2 class='sub-header'>Absent Students in Last 5 Sessions</h2>", unsafe_allow_html=True)
         
         if attendance_type == "Class":
-            class_file = os.path.join(DATA_DIR, st.session_state.username, "class_attendance.xlsx")
+            class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
             if os.path.exists(class_file):
                 df = pd.read_excel(class_file)
                 attendance_cols = [col for col in df.columns if col not in ['roll', 'name']]
@@ -484,7 +489,7 @@ def main_app():
                 st.info("Class attendance file not found.")
 
         elif attendance_type == "Practical" and selected_batch:
-            batch_file = os.path.join(DATA_DIR, st.session_state.username, f"batch_{selected_batch}_attendance.xlsx")
+            batch_file = get_user_data_path(st.session_state.username, f"batch_{selected_batch}_attendance.xlsx")
             if os.path.exists(batch_file):
                 df = pd.read_excel(batch_file)
                 attendance_cols = [col for col in df.columns if col not in ['roll', 'name']]
@@ -512,7 +517,7 @@ def main_app():
         
         with col1:
             st.markdown("<p style='font-weight: 500; color: #64FFDA;'>Class Attendance</p>", unsafe_allow_html=True)
-            class_file = os.path.join(DATA_DIR, st.session_state.username, "class_attendance.xlsx")
+            class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
             if os.path.exists(class_file):
                 with open(class_file, "rb") as f:
                     st.download_button(
@@ -530,7 +535,7 @@ def main_app():
             batch_options = ["A", "B", "C", "D"]
             selected_batch = st.selectbox("Select Batch", batch_options, key="dl_batch")
             
-            batch_file = os.path.join(DATA_DIR, st.session_state.username, f"batch_{selected_batch}_attendance.xlsx")
+            batch_file = get_user_data_path(st.session_state.username, f"batch_{selected_batch}_attendance.xlsx")
             if os.path.exists(batch_file):
                 with open(batch_file, "rb") as f:
                     st.download_button(
@@ -580,7 +585,7 @@ def main_app():
                     # Dataframe
                     st.dataframe(defaulters_df[["roll", "name", "Attendance %"]], use_container_width=True)
 
-                    defaulter_file = os.path.join(DATA_DIR, st.session_state.username, f"{type_name.lower()}_defaulters.xlsx")
+                    defaulter_file = get_user_data_path(st.session_state.username, f"{type_name.lower()}_defaulters.xlsx")
                     defaulters_df.to_excel(defaulter_file, index=False)
 
                     with open(defaulter_file, "rb") as f:
@@ -593,11 +598,11 @@ def main_app():
                         )
 
             if defaulter_type == "Class":
-                class_file = os.path.join(DATA_DIR, st.session_state.username, "class_attendance.xlsx")
+                class_file = get_user_data_path(st.session_state.username, "class_attendance.xlsx")
                 calculate_defaulters(class_file, "Class")
             else:
                 selected_batch = st.selectbox("Select Batch", ["A", "B", "C", "D"], key="defaulter_batch_select")
-                practical_file = os.path.join(DATA_DIR, st.session_state.username, "practical_attendance.xlsx")
+                practical_file = get_user_data_path(st.session_state.username, "practical_attendance.xlsx")
                 
                 if os.path.exists(practical_file):
                     df = pd.read_excel(practical_file)
@@ -625,8 +630,8 @@ def main_app():
                             # Dataframe
                             st.dataframe(defaulters_df[["roll", "name", "Attendance %"]], use_container_width=True)
 
-                            defaulter_file = os.path.join(DATA_DIR, st.session_state.username,
-                                                        f"batch_{selected_batch.lower()}_practical_defaulters.xlsx")
+                            defaulter_file = get_user_data_path(st.session_state.username, 
+                                                            f"batch_{selected_batch.lower()}_practical_defaulters.xlsx")
                             defaulters_df.to_excel(defaulter_file, index=False)
 
                             with open(defaulter_file, "rb") as f:
